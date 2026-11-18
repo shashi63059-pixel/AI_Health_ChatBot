@@ -1,15 +1,20 @@
 import os
 import pickle as pk
 import numpy as np
-import torch
 import random
 from sklearn.tree import _tree
 import Searching_des as des
 from reply import all_response_msg
-from nn_model import NeuralNet
+
+try:
+    import torch
+    from nn_model import NeuralNet
+except Exception:  # torch unavailable (e.g. serverless hosts)
+    torch = None
+    NeuralNet = None
 
 #******************************************* for Device ***********************************************
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') if torch is not None else "cpu"
 
 # remove warning 
 import warnings
@@ -64,7 +69,12 @@ else:
 
 # Load NN Model 
 FILE = os.path.join(BASE_DIR, "data.pth")
-data = torch.load(FILE, weights_only=False)
+NN_NUMPY_PATH = os.path.join(BASE_DIR, "nn_numpy.pkl")
+if torch is not None:
+    data = torch.load(FILE, weights_only=False)
+else:
+    with open(NN_NUMPY_PATH, "rb") as _nn_file:
+        data = pk.load(_nn_file)
 
 # -------------------------------------- initlising Global varible ----------------------
 return_input_disease = []
@@ -119,24 +129,34 @@ hidden_size = data["hidden_size"]
 output_size = data["output_size"]
 all_words = data['all_words']
 tags = data['tags']
-model_state = data["model_state"]
 
-nn_model = NeuralNet(input_size, hidden_size, output_size).to(device)
-nn_model.load_state_dict(model_state)
-nn_model.eval()
+if torch is not None:
+    model_state = data["model_state"]
+    nn_model = NeuralNet(input_size, hidden_size, output_size).to(device)
+    nn_model.load_state_dict(model_state)
+    nn_model.eval()
+else:
+    nn_model = None
+
+def _nn_logits(X):
+    if torch is not None:
+        with torch.no_grad():
+            return nn_model(torch.from_numpy(X).to(device)).cpu().numpy()
+    h = np.maximum(X @ data['w1'].T + data['b1'], 0.0)
+    h = np.maximum(h @ data['w2'].T + data['b2'], 0.0)
+    return h @ data['w3'].T + data['b3']
 
 # Create Nltk model 
 def nltk_output(msg):
     sentence = tokenize_msg(msg)
     X = bag_of_words(sentence, all_words)
-    X = X.reshape(1, X.shape[0])
-    X = torch.from_numpy(X).to(device)
-    output = nn_model(X)
-    _, predicted = torch.max(output, dim=1)
-    tag = tags[predicted.item()]
-    probs = torch.softmax(output, dim=1)
-    prob = probs[0][predicted.item()]
-    if prob.item() > 0.75:
+    X = X.reshape(1, X.shape[0]).astype(np.float32)
+    logits = _nn_logits(X)[0]
+    predicted = int(np.argmax(logits))
+    tag = tags[predicted]
+    exp = np.exp(logits - logits.max())
+    prob = exp[predicted] / exp.sum()
+    if float(prob) > 0.75:
         return random.choice(all_response_msg[tag])
     return None
 
