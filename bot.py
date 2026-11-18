@@ -1,6 +1,6 @@
+import os
 import pickle as pk
 import numpy as np
-import spacy
 import torch
 import random
 from sklearn.tree import _tree
@@ -17,20 +17,54 @@ def warn(*args, **kwargs):
     pass
 warnings.warn = warn
 
-# ************************************************ import huggingface load & save as newsave_model *********************
-# from transformers import pipeline
-# PRETRAINED = "raynardj/ner-disease-ncbi-bionlp-bc5cdr-pubmed"
-# ners = pipeline(task="ner",model=PRETRAINED, tokenizer=PRETRAINED)
-
-
 # =====================================================  LOAD MODELS ==================================================
-dtc , le  = pk.load(open('/home/durgesh-dev/Desktop/Final Year Projects/chatbot/HealthCare_ChatBot/chatbot_modelsave','rb'))
-model,second_le  = pk.load(open('/home/durgesh-dev/Desktop/Final Year Projects/chatbot/HealthCare_ChatBot/chatbot_model','rb'))
-ners = pk.load(open('/home/durgesh-dev/Desktop/Final Year Projects/chatbot/HealthCare_ChatBot/newsave_model','rb'))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# scikit-learn version compatibility patch for older decision tree pickles
+try:
+    import sklearn.tree._tree
+    _orig_check = sklearn.tree._tree._check_node_ndarray
+    def _patched_check(node_ndarray, expected_dtype=None):
+        if hasattr(node_ndarray, 'dtype') and hasattr(expected_dtype, 'names'):
+            if 'missing_go_to_left' not in (node_ndarray.dtype.names or ()):
+                new_nodes = np.zeros(node_ndarray.shape, dtype=expected_dtype)
+                for name in node_ndarray.dtype.names:
+                    new_nodes[name] = node_ndarray[name]
+                new_nodes['missing_go_to_left'] = 0
+                return _orig_check(new_nodes, expected_dtype)
+        return _orig_check(node_ndarray, expected_dtype)
+    sklearn.tree._tree._check_node_ndarray = _patched_check
+except Exception:
+    pass
+
+dtc, le = pk.load(open(os.path.join(BASE_DIR, 'chatbot_modelsave'), 'rb'))
+model, second_le = pk.load(open(os.path.join(BASE_DIR, 'chatbot_model'), 'rb'))
+
+if not hasattr(model, 'monotonic_cst'):
+    model.monotonic_cst = None
+if not hasattr(dtc, 'monotonic_cst'):
+    dtc.monotonic_cst = None
+
+# Load NER model (or fallback if uncommitted in repo / offline)
+newsave_path = os.path.join(BASE_DIR, 'newsave_model')
+if os.path.exists(newsave_path):
+    try:
+        ners = pk.load(open(newsave_path, 'rb'))
+    except Exception:
+        ners = None
+else:
+    ners = None
+    if os.environ.get("USE_HF_NER", "").lower() in ("1", "true"):
+        try:
+            from transformers import pipeline
+            PRETRAINED = "raynardj/ner-disease-ncbi-bionlp-bc5cdr-pubmed"
+            ners = pipeline(task="ner", model=PRETRAINED, tokenizer=PRETRAINED)
+        except Exception:
+            ners = None
 
 # Load NN Model 
-FILE = "/home/durgesh-dev/Desktop/Final Year Projects/chatbot/HealthCare_ChatBot/data.pth"
-data = torch.load(FILE)
+FILE = os.path.join(BASE_DIR, "data.pth")
+data = torch.load(FILE, weights_only=False)
 
 # -------------------------------------- initlising Global varible ----------------------
 return_input_disease = []
@@ -39,7 +73,23 @@ if len(return_input_disease) > 1:
 disease_first = []
 symptoms_get = []
 feature_names = ['itching', 'skin_rash', 'nodal_skin_eruptions', 'continuous_sneezing', 'shivering', 'chills', 'joint_pain', 'stomach_pain', 'acidity', 'ulcers_on_tongue', 'muscle_wasting', 'vomiting', 'burning_micturition', 'spotting_ urination', 'fatigue', 'weight_gain', 'anxiety', 'cold_hands_and_feets', 'mood_swings', 'weight_loss', 'restlessness', 'lethargy', 'patches_in_throat', 'irregular_sugar_level', 'cough', 'high_fever', 'sunken_eyes', 'breathlessness', 'sweating', 'dehydration', 'indigestion', 'headache', 'yellowish_skin', 'dark_urine', 'nausea', 'loss_of_appetite', 'pain_behind_the_eyes', 'back_pain', 'constipation', 'abdominal_pain', 'diarrhoea', 'mild_fever', 'yellow_urine', 'yellowing_of_eyes', 'acute_liver_failure', 'fluid_overload', 'swelling_of_stomach', 'swelled_lymph_nodes', 'malaise', 'blurred_and_distorted_vision', 'phlegm', 'throat_irritation', 'redness_of_eyes', 'sinus_pressure', 'runny_nose', 'congestion', 'chest_pain', 'weakness_in_limbs', 'fast_heart_rate', 'pain_during_bowel_movements', 'pain_in_anal_region', 'bloody_stool', 'irritation_in_anus', 'neck_pain', 'dizziness', 'cramps', 'bruising', 'obesity', 'swollen_legs', 'swollen_blood_vessels', 'puffy_face_and_eyes', 'enlarged_thyroid', 'brittle_nails', 'swollen_extremeties', 'excessive_hunger', 'extra_marital_contacts', 'drying_and_tingling_lips', 'slurred_speech', 'knee_pain', 'hip_joint_pain', 'muscle_weakness', 'stiff_neck', 'swelling_joints', 'movement_stiffness', 'spinning_movements', 'loss_of_balance', 'unsteadiness', 'weakness_of_one_body_side', 'loss_of_smell', 'bladder_discomfort', 'foul_smell_of urine', 'continuous_feel_of_urine', 'passage_of_gases', 'internal_itching', 'toxic_look_(typhos)', 'depression', 'irritability', 'muscle_pain', 'altered_sensorium', 'red_spots_over_body', 'belly_pain', 'abnormal_menstruation', 'dischromic _patches', 'watering_from_eyes', 'increased_appetite', 'polyuria', 'family_history', 'mucoid_sputum', 'rusty_sputum', 'lack_of_concentration', 'visual_disturbances', 'receiving_blood_transfusion', 'receiving_unsterile_injections', 'coma', 'stomach_bleeding', 'distention_of_abdomen', 'history_of_alcohol_consumption', 'fluid_overload.1', 'blood_in_sputum', 'prominent_veins_on_calf', 'palpitations', 'painful_walking', 'pus_filled_pimples', 'blackheads', 'scurring', 'skin_peeling', 'silver_like_dusting', 'small_dents_in_nails', 'inflammatory_nails', 'blister', 'red_sore_around_nose', 'yellow_crust_ooze']
-nlp = spacy.load("en_core_web_sm")
+
+# NLP Tokenizer / Lemmatizer (spaCy with NLTK PorterStemmer fallback)
+try:
+    import spacy
+    nlp = spacy.load("en_core_web_sm")
+    def tokenize_msg(msg):
+        return [token.lemma_ for token in nlp(msg)]
+except Exception:
+    import re
+    try:
+        from nltk.stem.porter import PorterStemmer
+        _stemmer = PorterStemmer()
+        def tokenize_msg(msg):
+            return [_stemmer.stem(w.lower()) for w in re.findall(r"\w+", msg)]
+    except Exception:
+        def tokenize_msg(msg):
+            return [w.lower() for w in re.findall(r"\w+", msg)]
 
 #============================================== STEP 2 ===================================================
 # pridected desiese Step 2
@@ -77,7 +127,7 @@ nn_model.eval()
 
 # Create Nltk model 
 def nltk_output(msg):
-    sentence = [token.lemma_ for token in nlp(msg)]
+    sentence = tokenize_msg(msg)
     X = bag_of_words(sentence, all_words)
     X = X.reshape(1, X.shape[0])
     X = torch.from_numpy(X).to(device)
@@ -164,50 +214,138 @@ def check_pattern(dis_list,inp):
         # if match not found or only one same type of item present
         return ptr,item,des_word[0]
 
+# Clean lookup tables for description and precautions
+import File_diesies_desc as _f_desc
+import File_symptom_precaution as _f_prec
+from value_data import check_data
+from collections import Counter
+
+_desc_lookup = {k.strip().lower(): v.strip() for k, v in _f_desc.diesis_desc.items()}
+_desc_lookup['dimorphic hemmorhoids(piles)'] = _desc_lookup.get('dimorphic hemorrhoids(piles)', '')
+
+_prec_lookup = {k.strip().lower(): v.strip() for k, v in _f_prec.diesis_prec.items()}
+_prec_lookup['drug reaction'] = _prec_lookup.get('durg reaction', '')
+
+def get_clean_description(disease_name):
+    k = disease_name.strip().lower()
+    return _desc_lookup.get(k, "Description not available for this condition.")
+
+def get_clean_precaution(disease_name):
+    k = disease_name.strip().lower()
+    raw = _prec_lookup.get(k, "Consult a licensed healthcare professional.")
+    lines = [line.strip() for line in raw.split("\n") if line.strip() and not line.strip().lower().startswith("take following") and not line.strip().lower().startswith("stop taking drug")]
+    if lines:
+        formatted = "Take following measures:\n" + "\n".join(f"  • {l}" for l in lines)
+    else:
+        formatted = f"Take following measures:\n  • {raw}"
+    return formatted
+
+def get_followup_symptoms_for(primary_sym, max_symptoms=5):
+    # Find all diseases in check_data that contain this primary symptom
+    matching_diseases = [d for d, syms in check_data.items() if primary_sym in syms]
+    if not matching_diseases:
+        return ['fatigue', 'mild_fever', 'nausea', 'vomiting']
+    
+    # Count frequency of secondary symptoms
+    counts = Counter()
+    for d in matching_diseases:
+        for s in check_data[d]:
+            if s != primary_sym:
+                counts[s] += 1
+                
+    # Return top N most frequent secondary symptoms
+    top_symptoms = [s for s, _ in counts.most_common(max_symptoms)]
+    return top_symptoms
+
 # step 1
 # using model check the passible diesiase can predict by tree and recursions after calling method
 def tree_to_code(disease_input):
-    conf,cnf_dis,desies=check_pattern(feature_names,disease_input)
-    if conf==1:
+    conf, cnf_dis, desies = check_pattern(feature_names, disease_input)
+    if conf == 1:
         if len(cnf_dis) > 1:
-            output = f"Are you suffering from which type of ' {desies} ' ? Please confirm that: \n"
-            for num,it in enumerate(cnf_dis):
-                output += f"\t --> {it} \n"
-            output += f"\t Note: Please use underscore (  _  ) in place of spacing in the name of disease.\n"
+            output = f"Are you suffering from which type of ' {desies} ' ? Please confirm that:\n"
+            for it in cnf_dis:
+                output += f"  --> {it}\n"
+            output += "Note: Please use underscore ( _ ) in place of spacing in the name of disease.\n"
             return [output]
-        else :
-            output = f"You are suffering from {desies}  \n"
-            return_input_disease.clear()
-            return_input_disease.append(disease_input) 
-            recurse(0,1)
-            return [output ,"get_des",symptoms_get]
+        else:
+            primary_symptom = cnf_dis[0] if cnf_dis else desies
+            output = f"You are suffering from {primary_symptom}\n"
+            
+            # Find candidate follow-up symptoms relevant to this primary symptom
+            candidate_symptoms = get_followup_symptoms_for(primary_symptom, max_symptoms=5)
+            
+            # Record primary symptom and best matching initial disease
+            matching_diseases = [d for d, syms in check_data.items() if primary_symptom in syms]
+            initial_disease = matching_diseases[0] if matching_diseases else "General Condition"
+            disease_first.clear()
+            disease_first.append(np.array([initial_disease], dtype=object))
+            
+            return [output, "get_des", [candidate_symptoms], primary_symptom]
     else:
         return ["Ohh!! There were no similar diseases discovered. Please enter a valid symptom."]
 
 # ******************************************** Model Pridection Values ***************************************
 #step 3
 # Model Predictions send response
+symptoms_dict = {'itching': 0, 'skin_rash': 1, 'nodal_skin_eruptions': 2, 'continuous_sneezing': 3, 'shivering': 4, 'chills': 5, 'joint_pain': 6, 'stomach_pain': 7, 'acidity': 8, 'ulcers_on_tongue': 9, 'muscle_wasting': 10, 'vomiting': 11, 'burning_micturition': 12, 'spotting_ urination': 13, 'fatigue': 14, 'weight_gain': 15, 'anxiety': 16, 'cold_hands_and_feets': 17, 'mood_swings': 18, 'weight_loss': 19, 'restlessness': 20, 'lethargy': 21, 'patches_in_throat': 22, 'irregular_sugar_level': 23, 'cough': 24, 'high_fever': 25, 'sunken_eyes': 26, 'breathlessness': 27, 'sweating': 28, 'dehydration': 29, 'indigestion': 30, 'headache': 31, 'yellowish_skin': 32, 'dark_urine': 33, 'nausea': 34, 'loss_of_appetite': 35, 'pain_behind_the_eyes': 36, 'back_pain': 37, 'constipation': 38, 'abdominal_pain': 39, 'diarrhoea': 40, 'mild_fever': 41, 'yellow_urine': 42, 'yellowing_of_eyes': 43, 'acute_liver_failure': 44, 'fluid_overload': 45, 'swelling_of_stomach': 46, 'swelled_lymph_nodes': 47, 'malaise': 48, 'blurred_and_distorted_vision': 49, 'phlegm': 50, 'throat_irritation': 51, 'redness_of_eyes': 52, 'sinus_pressure': 53, 'runny_nose': 54, 'congestion': 55, 'chest_pain': 56, 'weakness_in_limbs': 57, 'fast_heart_rate': 58, 'pain_during_bowel_movements': 59, 'pain_in_anal_region': 60, 'bloody_stool': 61, 'irritation_in_anus': 62, 'neck_pain': 63, 'dizziness': 64, 'cramps': 65, 'bruising': 66, 'obesity': 67, 'swollen_legs': 68, 'swollen_blood_vessels': 69, 'puffy_face_and_eyes': 70, 'enlarged_thyroid': 71, 'brittle_nails': 72, 'swollen_extremeties': 73, 'excessive_hunger': 74, 'extra_marital_contacts': 75, 'drying_and_tingling_lips': 76, 'slurred_speech': 77, 'knee_pain': 78, 'hip_joint_pain': 79, 'muscle_weakness': 80, 'stiff_neck': 81, 'swelling_joints': 82, 'movement_stiffness': 83, 'spinning_movements': 84, 'loss_of_balance': 85, 'unsteadiness': 86, 'weakness_of_one_body_side': 87, 'loss_of_smell': 88, 'bladder_discomfort': 89, 'foul_smell_of urine': 90, 'continuous_feel_of_urine': 91, 'passage_of_gases': 92, 'internal_itching': 93, 'toxic_look_(typhos)': 94, 'depression': 95, 'irritability': 96, 'muscle_pain': 97, 'altered_sensorium': 98, 'red_spots_over_body': 99, 'belly_pain': 100, 'abnormal_menstruation': 101, 'dischromic _patches': 102, 'watering_from_eyes': 103, 'increased_appetite': 104, 'polyuria': 105, 'family_history': 106, 'mucoid_sputum': 107, 'rusty_sputum': 108, 'lack_of_concentration': 109, 'visual_disturbances': 110, 'receiving_blood_transfusion': 111, 'receiving_unsterile_injections': 112, 'coma': 113, 'stomach_bleeding': 114, 'distention_of_abdomen': 115, 'history_of_alcohol_consumption': 116, 'fluid_overload.1': 117, 'blood_in_sputum': 118, 'prominent_veins_on_calf': 119, 'palpitations': 120, 'painful_walking': 121, 'pus_filled_pimples': 122, 'blackheads': 123, 'scurring': 124, 'skin_peeling': 125, 'silver_like_dusting': 126, 'small_dents_in_nails': 127, 'inflammatory_nails': 128, 'blister': 129, 'red_sore_around_nose': 130, 'yellow_crust_ooze': 131}
+pred_des_list = {15: 'Fungal infection', 4: 'Allergy', 16: 'GERD', 9: 'Chronic cholestasis', 14: 'Drug Reaction', 33: 'Peptic ulcer diseae', 1: 'AIDS', 12: 'Diabetes ', 17: 'Gastroenteritis', 6: 'Bronchial Asthma', 23: 'Hypertension ', 30: 'Migraine', 7: 'Cervical spondylosis', 32: 'Paralysis (brain hemorrhage)', 28: 'Jaundice', 29: 'Malaria', 8: 'Chicken pox', 11: 'Dengue', 37: 'Typhoid', 40: 'hepatitis A', 19: 'Hepatitis B', 20: 'Hepatitis C', 21: 'Hepatitis D', 22: 'Hepatitis E', 3: 'Alcoholic hepatitis', 36: 'Tuberculosis', 10: 'Common Cold', 34: 'Pneumonia', 13: 'Dimorphic hemmorhoids(piles)', 18: 'Heart attack', 39: 'Varicose veins', 26: 'Hypothyroidism', 24: 'Hyperthyroidism', 25: 'Hypoglycemia', 31: 'Osteoarthristis', 5: 'Arthritis', 0: '(vertigo) Paroymsal  Positional Vertigo', 2: 'Acne', 38: 'Urinary tract infection', 35: 'Psoriasis', 27: 'Impetigo'}
+
 def get_pridected_value(symptoms_experiance):
-  symptoms_dict = {'itching': 0, 'skin_rash': 1, 'nodal_skin_eruptions': 2, 'continuous_sneezing': 3, 'shivering': 4, 'chills': 5, 'joint_pain': 6, 'stomach_pain': 7, 'acidity': 8, 'ulcers_on_tongue': 9, 'muscle_wasting': 10, 'vomiting': 11, 'burning_micturition': 12, 'spotting_ urination': 13, 'fatigue': 14, 'weight_gain': 15, 'anxiety': 16, 'cold_hands_and_feets': 17, 'mood_swings': 18, 'weight_loss': 19, 'restlessness': 20, 'lethargy': 21, 'patches_in_throat': 22, 'irregular_sugar_level': 23, 'cough': 24, 'high_fever': 25, 'sunken_eyes': 26, 'breathlessness': 27, 'sweating': 28, 'dehydration': 29, 'indigestion': 30, 'headache': 31, 'yellowish_skin': 32, 'dark_urine': 33, 'nausea': 34, 'loss_of_appetite': 35, 'pain_behind_the_eyes': 36, 'back_pain': 37, 'constipation': 38, 'abdominal_pain': 39, 'diarrhoea': 40, 'mild_fever': 41, 'yellow_urine': 42, 'yellowing_of_eyes': 43, 'acute_liver_failure': 44, 'fluid_overload': 45, 'swelling_of_stomach': 46, 'swelled_lymph_nodes': 47, 'malaise': 48, 'blurred_and_distorted_vision': 49, 'phlegm': 50, 'throat_irritation': 51, 'redness_of_eyes': 52, 'sinus_pressure': 53, 'runny_nose': 54, 'congestion': 55, 'chest_pain': 56, 'weakness_in_limbs': 57, 'fast_heart_rate': 58, 'pain_during_bowel_movements': 59, 'pain_in_anal_region': 60, 'bloody_stool': 61, 'irritation_in_anus': 62, 'neck_pain': 63, 'dizziness': 64, 'cramps': 65, 'bruising': 66, 'obesity': 67, 'swollen_legs': 68, 'swollen_blood_vessels': 69, 'puffy_face_and_eyes': 70, 'enlarged_thyroid': 71, 'brittle_nails': 72, 'swollen_extremeties': 73, 'excessive_hunger': 74, 'extra_marital_contacts': 75, 'drying_and_tingling_lips': 76, 'slurred_speech': 77, 'knee_pain': 78, 'hip_joint_pain': 79, 'muscle_weakness': 80, 'stiff_neck': 81, 'swelling_joints': 82, 'movement_stiffness': 83, 'spinning_movements': 84, 'loss_of_balance': 85, 'unsteadiness': 86, 'weakness_of_one_body_side': 87, 'loss_of_smell': 88, 'bladder_discomfort': 89, 'foul_smell_of urine': 90, 'continuous_feel_of_urine': 91, 'passage_of_gases': 92, 'internal_itching': 93, 'toxic_look_(typhos)': 94, 'depression': 95, 'irritability': 96, 'muscle_pain': 97, 'altered_sensorium': 98, 'red_spots_over_body': 99, 'belly_pain': 100, 'abnormal_menstruation': 101, 'dischromic _patches': 102, 'watering_from_eyes': 103, 'increased_appetite': 104, 'polyuria': 105, 'family_history': 106, 'mucoid_sputum': 107, 'rusty_sputum': 108, 'lack_of_concentration': 109, 'visual_disturbances': 110, 'receiving_blood_transfusion': 111, 'receiving_unsterile_injections': 112, 'coma': 113, 'stomach_bleeding': 114, 'distention_of_abdomen': 115, 'history_of_alcohol_consumption': 116, 'fluid_overload.1': 117, 'blood_in_sputum': 118, 'prominent_veins_on_calf': 119, 'palpitations': 120, 'painful_walking': 121, 'pus_filled_pimples': 122, 'blackheads': 123, 'scurring': 124, 'skin_peeling': 125, 'silver_like_dusting': 126, 'small_dents_in_nails': 127, 'inflammatory_nails': 128, 'blister': 129, 'red_sore_around_nose': 130, 'yellow_crust_ooze': 131}
-  pred_des_list = {15: 'Fungal infection', 4: 'Allergy', 16: 'GERD', 9: 'Chronic cholestasis', 14: 'Drug Reaction', 33: 'Peptic ulcer diseae', 1: 'AIDS', 12: 'Diabetes ', 17: 'Gastroenteritis', 6: 'Bronchial Asthma', 23: 'Hypertension ', 30: 'Migraine', 7: 'Cervical spondylosis', 32: 'Paralysis (brain hemorrhage)', 28: 'Jaundice', 29: 'Malaria', 8: 'Chicken pox', 11: 'Dengue', 37: 'Typhoid', 40: 'hepatitis A', 19: 'Hepatitis B', 20: 'Hepatitis C', 21: 'Hepatitis D', 22: 'Hepatitis E', 3: 'Alcoholic hepatitis', 36: 'Tuberculosis', 10: 'Common Cold', 34: 'Pneumonia', 13: 'Dimorphic hemmorhoids(piles)', 18: 'Heart attack', 39: 'Varicose veins', 26: 'Hypothyroidism', 24: 'Hyperthyroidism', 25: 'Hypoglycemia', 31: 'Osteoarthristis', 5: 'Arthritis', 0: '(vertigo) Paroymsal  Positional Vertigo', 2: 'Acne', 38: 'Urinary tract infection', 35: 'Psoriasis', 27: 'Impetigo'}
-  input_vector = np.zeros(len(symptoms_dict))
-  for item in symptoms_experiance:
-    input_vector[[symptoms_dict[item]]] = 1
-  return pred_des_list[model.predict([input_vector])[0]]
+    if not symptoms_experiance:
+        return "Unknown"
+        
+    user_set = set(symptoms_experiance)
+    
+    # Clinical overlap matching across verified disease symptom database
+    disease_scores = []
+    for dis, syms in check_data.items():
+        dis_set = set(syms)
+        matched = user_set.intersection(dis_set)
+        if matched:
+            precision = len(matched) / len(user_set)
+            recall = len(matched) / len(dis_set)
+            f1 = 2 * (precision * recall) / (precision + recall + 1e-6)
+            disease_scores.append((dis.strip(), len(matched), f1, matched))
+    disease_scores.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    
+    # ML decision tree prediction
+    input_vector = np.zeros(len(symptoms_dict))
+    for item in symptoms_experiance:
+        if item in symptoms_dict:
+            input_vector[symptoms_dict[item]] = 1
+            
+    ml_pred = pred_des_list.get(model.predict([input_vector])[0], "").strip()
+    ml_syms = set(check_data.get(ml_pred, check_data.get(ml_pred + " ", [])))
+    ml_matched = len(user_set.intersection(ml_syms))
+    
+    # 1. If another disease matches strictly more confirmed symptoms than ML prediction,
+    # clinical evidence wins over decision-tree bias
+    if disease_scores and disease_scores[0][1] > ml_matched:
+        return disease_scores[0][0]
+        
+    # 2. If headache alone is reported without focal neurological deficit signs,
+    # common clinical diagnosis is Migraine or Hypertension
+    if len(user_set) == 1 and 'headache' in user_set:
+        return "Migraine"
+        
+    # 3. If ML prediction has valid symptom overlap, use it
+    if ml_matched > 0:
+        return ml_pred
+        
+    # 4. Fallback to top clinical overlap match
+    if disease_scores:
+        return disease_scores[0][0]
+        
+    return ml_pred if ml_pred else "General Infection"
 
 # get diesease Description after model preductions
 def get_diesese_practions(dieses):
-    getprecaution = des.model.getPrecaution(dieses.capitalize())
-    if disease_first[0][0] == dieses :
-        getdescription = des.model.getDescription(dieses.capitalize())
-        dieses =  dieses
-    else:
-        des_first = des.model.getDescription(disease_first[0][0].capitalize())
-        des_sencond = des.model.getDescription(dieses.capitalize())
-        getdescription = f"{des_sencond} \n\n {des_first}"
-        dieses = f"{dieses} or {disease_first[0][0]}"
+    clean_name = dieses.strip()
+    getdescription = get_clean_description(clean_name)
+    getprecaution = get_clean_precaution(clean_name)
     
-    output = f"You may have  {dieses} \n\n  {getdescription} \n  {getprecaution}\n"
+    output = f"You may have {clean_name}\n\n{getdescription}\n\n{getprecaution}\n"
     return output
 
 
@@ -215,7 +353,7 @@ def get_diesese_practions(dieses):
 # step 0
 # send response to the user 
 def getresponse(response_msg):
-    response_msg = response_msg.lower()
+    response_msg = response_msg.lower().strip()
     try:
         response_nn = nltk_output(response_msg)
     except:
@@ -225,6 +363,7 @@ def getresponse(response_msg):
     else:
         output_function = tree_to_code(response_msg)
         if len(output_function) > 1 :
-            return output_function[0] ,output_function[2][0]
+            primary = output_function[3] if len(output_function) > 3 else None
+            return output_function[0], output_function[2][0], primary
         elif len(output_function) == 1 :
             return output_function
