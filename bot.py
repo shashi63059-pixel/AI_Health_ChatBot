@@ -197,42 +197,95 @@ def recurse(node, depth):
   else:
     present_disease = print_disease(tree_.value[node])
    
+# Symptom text normalization and common spelling aliases
+_SYMPTOM_ALIASES = {
+    "fever": "fever",
+    "high fever": "high_fever",
+    "mild fever": "mild_fever",
+    "voming": "vomiting",
+    "vommitting": "vomiting",
+    "vomitting": "vomiting",
+    "throwing up": "vomiting",
+    "feel sick": "nausea",
+    "feeling sick": "nausea",
+    "tired": "fatigue",
+    "tiredness": "fatigue",
+    "stomach ache": "stomach_pain",
+    "stomachache": "stomach_pain",
+    "belly ache": "belly_pain",
+    "body ache": "muscle_pain",
+    "body pain": "muscle_pain",
+    "shortness of breath": "breathlessness",
+    "difficulty breathing": "breathlessness",
+}
+
+def normalize_symptom_text(text):
+    """Convert common symptom phrases into the dataset's canonical names."""
+    import re
+    value = str(text or "").lower().strip()
+    value = re.sub(r"[_-]+", " ", value)
+    value = re.sub(r"[^a-z0-9\s]", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    if value in _SYMPTOM_ALIASES:
+        return _SYMPTOM_ALIASES[value]
+    canonical = value.replace(" ", "_")
+    if canonical in feature_names:
+        return canonical
+    return value
+
 # step 1-A 
 # Check pattern of input data and extract usefull information
-def check_pattern(dis_list,inp):
+def check_pattern(dis_list, inp):
+    """Match user text to known symptom names using normalized phrase matching."""
     import re
-    pred_list=[]
-    ptr=0
-    
-    #input hugging face word
-    try:
-        des_word = []
-        if len(des_word) > 1:
-            des_word.clear()
-        new_models = ners(f"i am suffering from {inp}" , aggregation_strategy="first")
-        for result in new_models:
-            if result['entity_group'] == "Disease" and int(float(result['score'])*100) >= 65 :
-                    des_word.append(result['word'].replace(" ", ""))
-        regexp = re.compile(des_word[0])
-    except:
-        des_word = []
-        if len(des_word) > 1:
-            des_word.clear()
-        des_word.append(inp)
-        try:       
-            regexp = re.compile(des_word[0])
-        except:
-            des_word.append("joint pain")
-            regexp = re.compile(des_word[0])
-    for item in dis_list:
-        if regexp.search(item):
-            pred_list.append(item)
-    if(len(pred_list)>0):
-       # if match found then 
-        return 1,pred_list,des_word[0]
-    else:
-        # if match not found or only one same type of item present
-        return ptr,item,des_word[0]
+
+    raw = str(inp or "").strip().lower()
+    normalized = normalize_symptom_text(raw)
+
+    # A generic fever needs clarification, including natural-language messages.
+    if normalized == "fever" or re.search(r"\bfever\b", raw):
+        return 1, ["high_fever", "mild_fever"], "fever"
+
+    # First try a direct canonical symptom match.
+    if normalized in dis_list:
+        return 1, [normalized], normalized
+
+    # Match known symptom phrases in natural-language messages.
+    text = re.sub(r"[_-]+", " ", raw)
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    aliases = {
+        "voming": "vomiting",
+        "vommitting": "vomiting",
+        "vomitting": "vomiting",
+        "throwing up": "vomiting",
+        "shortness of breath": "breathlessness",
+        "difficulty breathing": "breathlessness",
+        "stomach ache": "stomach_pain",
+        "stomachache": "stomach_pain",
+        "body ache": "muscle_pain",
+        "body pain": "muscle_pain",
+    }
+    for wrong, right in aliases.items():
+        text = re.sub(r"\b" + re.escape(wrong) + r"\b", right.replace("_", " "), text)
+
+    matches = []
+    for symptom in dis_list:
+        phrase = symptom.replace("_", " ").strip()
+        if phrase and re.search(r"\b" + re.escape(phrase) + r"\b", text):
+            matches.append(symptom)
+
+    # Also allow a direct single-token canonical match.
+    if not matches and normalized in dis_list:
+        matches = [normalized]
+
+    if matches:
+        # Preserve feature-list order and avoid duplicates.
+        return 1, list(dict.fromkeys(matches)), matches[0]
+
+    return 0, [], normalized
+
 
 # Clean lookup tables for description and precautions
 import File_diesies_desc as _f_desc
@@ -260,50 +313,61 @@ def get_clean_precaution(disease_name):
         formatted = f"Take following measures:\n  • {raw}"
     return formatted
 
-def get_followup_symptoms_for(primary_sym, max_symptoms=5):
-    # Find all diseases in check_data that contain this primary symptom
-    matching_diseases = [d for d, syms in check_data.items() if primary_sym in syms]
-    if not matching_diseases:
-        return ['fatigue', 'mild_fever', 'nausea', 'vomiting']
-    
-    # Count frequency of secondary symptoms
+def get_followup_symptoms_for(primary_sym, max_symptoms=5, exclude=None):
+    """Suggest common co-occurring dataset symptoms, excluding already selected ones."""
+    exclude_set = set(exclude or [])
+    exclude_set.add(primary_sym)
     counts = Counter()
-    for d in matching_diseases:
-        for s in check_data[d]:
-            if s != primary_sym:
-                counts[s] += 1
-                
-    # Return top N most frequent secondary symptoms
-    top_symptoms = [s for s, _ in counts.most_common(max_symptoms)]
-    return top_symptoms
+
+    matching_diseases = [
+        symptoms for symptoms in check_data.values()
+        if primary_sym in symptoms
+    ]
+    for symptoms in matching_diseases:
+        for symptom in symptoms:
+            if symptom not in exclude_set:
+                counts[symptom] += 1
+
+    return [symptom for symptom, _ in counts.most_common(max_symptoms)]
+
 
 # step 1
 # using model check the passible diesiase can predict by tree and recursions after calling method
 def tree_to_code(disease_input):
-    conf, cnf_dis, desies = check_pattern(feature_names, disease_input)
-    if conf == 1:
-        if len(cnf_dis) > 1:
-            output = f"Are you suffering from which type of ' {desies} ' ? Please confirm that:\n"
-            for it in cnf_dis:
-                output += f"  --> {it}\n"
-            output += "Note: Please use underscore ( _ ) in place of spacing in the name of disease.\n"
-            return [output]
-        else:
-            primary_symptom = cnf_dis[0] if cnf_dis else desies
-            output = f"You are suffering from {primary_symptom}\n"
-            
-            # Find candidate follow-up symptoms relevant to this primary symptom
-            candidate_symptoms = get_followup_symptoms_for(primary_symptom, max_symptoms=5)
-            
-            # Record primary symptom and best matching initial disease
-            matching_diseases = [d for d, syms in check_data.items() if primary_symptom in syms]
-            initial_disease = matching_diseases[0] if matching_diseases else "General Condition"
-            disease_first.clear()
-            disease_first.append(np.array([initial_disease], dtype=object))
-            
-            return [output, "get_des", [candidate_symptoms], primary_symptom]
-    else:
-        return ["Ohh!! There were no similar diseases discovered. Please enter a valid symptom."]
+    conf, matched_symptoms, normalized_input = check_pattern(feature_names, disease_input)
+
+    if not conf:
+        return ["I couldn't identify that symptom. Try a symptom such as fever, headache, cough, vomiting, or fatigue."]
+
+    if normalized_input == "fever":
+        return [
+            "Do you mean mild fever or high fever? You can choose either option, or tell me if you are unsure."
+        ]
+
+    # Multiple symptoms may be extracted from one natural-language message.
+    primary_symptom = matched_symptoms[0]
+    output = "I understood these symptom(s): " + ", ".join(
+        symptom.replace("_", " ") for symptom in matched_symptoms
+    )
+
+    candidate_symptoms = get_followup_symptoms_for(
+        primary_symptom, max_symptoms=5, exclude=matched_symptoms
+    )
+
+    # Do not label the user as having a disease at this stage.
+    disease_first.clear()
+    disease_first.append(np.array(["Undetermined"], dtype=object))
+
+    if candidate_symptoms:
+        return [
+            output,
+            "get_des",
+            [candidate_symptoms],
+            primary_symptom
+        ]
+
+    return [output + ". Please consult a healthcare professional for an assessment."]
+
 
 # ******************************************** Model Pridection Values ***************************************
 #step 3
@@ -312,52 +376,44 @@ symptoms_dict = {'itching': 0, 'skin_rash': 1, 'nodal_skin_eruptions': 2, 'conti
 pred_des_list = {15: 'Fungal infection', 4: 'Allergy', 16: 'GERD', 9: 'Chronic cholestasis', 14: 'Drug Reaction', 33: 'Peptic ulcer diseae', 1: 'AIDS', 12: 'Diabetes ', 17: 'Gastroenteritis', 6: 'Bronchial Asthma', 23: 'Hypertension ', 30: 'Migraine', 7: 'Cervical spondylosis', 32: 'Paralysis (brain hemorrhage)', 28: 'Jaundice', 29: 'Malaria', 8: 'Chicken pox', 11: 'Dengue', 37: 'Typhoid', 40: 'hepatitis A', 19: 'Hepatitis B', 20: 'Hepatitis C', 21: 'Hepatitis D', 22: 'Hepatitis E', 3: 'Alcoholic hepatitis', 36: 'Tuberculosis', 10: 'Common Cold', 34: 'Pneumonia', 13: 'Dimorphic hemmorhoids(piles)', 18: 'Heart attack', 39: 'Varicose veins', 26: 'Hypothyroidism', 24: 'Hyperthyroidism', 25: 'Hypoglycemia', 31: 'Osteoarthristis', 5: 'Arthritis', 0: '(vertigo) Paroymsal  Positional Vertigo', 2: 'Acne', 38: 'Urinary tract infection', 35: 'Psoriasis', 27: 'Impetigo'}
 
 def get_pridected_value(symptoms_experiance):
-    if not symptoms_experiance:
+    """
+    Return a tentative dataset match only when multiple distinct symptoms overlap.
+    This is not a medical diagnosis.
+    """
+    normalized_symptoms = []
+    for symptom in symptoms_experiance or []:
+        canonical = normalize_symptom_text(symptom)
+        if canonical in symptoms_dict:
+            normalized_symptoms.append(canonical)
+
+    user_set = set(normalized_symptoms)
+    if len(user_set) < 2:
         return "Unknown"
-        
-    user_set = set(symptoms_experiance)
-    
-    # Clinical overlap matching across verified disease symptom database
+
     disease_scores = []
-    for dis, syms in check_data.items():
-        dis_set = set(syms)
-        matched = user_set.intersection(dis_set)
-        if matched:
-            precision = len(matched) / len(user_set)
-            recall = len(matched) / len(dis_set)
-            f1 = 2 * (precision * recall) / (precision + recall + 1e-6)
-            disease_scores.append((dis.strip(), len(matched), f1, matched))
-    disease_scores.sort(key=lambda x: (x[1], x[2]), reverse=True)
-    
-    # ML decision tree prediction
-    input_vector = np.zeros(len(symptoms_dict))
-    for item in symptoms_experiance:
-        if item in symptoms_dict:
-            input_vector[symptoms_dict[item]] = 1
-            
-    ml_pred = pred_des_list.get(model.predict([input_vector])[0], "").strip()
-    ml_syms = set(check_data.get(ml_pred, check_data.get(ml_pred + " ", [])))
-    ml_matched = len(user_set.intersection(ml_syms))
-    
-    # 1. If another disease matches strictly more confirmed symptoms than ML prediction,
-    # clinical evidence wins over decision-tree bias
-    if disease_scores and disease_scores[0][1] > ml_matched:
-        return disease_scores[0][0]
-        
-    # 2. If headache alone is reported without focal neurological deficit signs,
-    # common clinical diagnosis is Migraine or Hypertension
-    if len(user_set) == 1 and 'headache' in user_set:
-        return "Migraine"
-        
-    # 3. If ML prediction has valid symptom overlap, use it
-    if ml_matched > 0:
-        return ml_pred
-        
-    # 4. Fallback to top clinical overlap match
-    if disease_scores:
-        return disease_scores[0][0]
-        
-    return ml_pred if ml_pred else "General Infection"
+    for disease, symptoms in check_data.items():
+        disease_set = set(symptoms)
+        matched = user_set.intersection(disease_set)
+        if len(matched) < 2:
+            continue
+
+        precision = len(matched) / max(len(user_set), 1)
+        recall = len(matched) / max(len(disease_set), 1)
+        f1 = 2 * precision * recall / max(precision + recall, 1e-9)
+        disease_scores.append((disease.strip(), len(matched), f1, precision))
+
+    if not disease_scores:
+        return "Unknown"
+
+    disease_scores.sort(key=lambda item: (item[1], item[2], item[3]), reverse=True)
+    best_name, matched_count, best_f1, best_precision = disease_scores[0]
+
+    # Require more than one matching symptom and a meaningful overlap.
+    if matched_count < 2 or best_precision < 0.5:
+        return "Unknown"
+
+    return best_name
+
 
 # get diesease Description after model preductions
 def get_diesese_practions(dieses):
@@ -373,17 +429,23 @@ def get_diesese_practions(dieses):
 # step 0
 # send response to the user 
 def getresponse(response_msg):
-    response_msg = response_msg.lower().strip()
+    response_msg = str(response_msg or "").lower().strip()
+
+    # Route recognized symptom messages before the general conversational model.
+    symptom_result = tree_to_code(response_msg)
+    if len(symptom_result) > 1:
+        primary = symptom_result[3] if len(symptom_result) > 3 else None
+        return symptom_result[0], symptom_result[2][0], primary
+
+    # If it is not a recognized symptom, try the general conversation model.
     try:
         response_nn = nltk_output(response_msg)
-    except:
+    except Exception:
         response_nn = None
+
     if response_nn is not None:
         return [response_nn]
-    else:
-        output_function = tree_to_code(response_msg)
-        if len(output_function) > 1 :
-            primary = output_function[3] if len(output_function) > 3 else None
-            return output_function[0], output_function[2][0], primary
-        elif len(output_function) == 1 :
-            return output_function
+
+    return symptom_result
+
+
