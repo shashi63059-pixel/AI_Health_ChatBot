@@ -1,0 +1,9 @@
+.git/
+__pycache__/
+*.pyc
+*.ipynb
+Health_Care_App.py
+firstwindow.png
+main_window.png
+requirements-desktop.txt
+data.pth
